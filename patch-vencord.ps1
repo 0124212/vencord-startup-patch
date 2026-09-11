@@ -49,7 +49,7 @@ $BranchProcesses = @{
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $line = "{0:yyyy-MM-dd HH:mm:ss} [{1}] {2}" -f (Get-Date), $Level, $Message
-    Add-Content -Path $LogPath -Value $line
+    Add-Content -Path $LogPath -Value $line -Encoding UTF8
     Write-Host $line
 }
 
