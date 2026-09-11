@@ -53,6 +53,34 @@ function Write-Log {
     Write-Host $line
 }
 
+function Invoke-Native {
+    <#
+    .SYNOPSIS
+        Runs a native exe and captures merged output without tripping on stderr.
+    .DESCRIPTION
+        VencordInstallerCli logs INFO/ERROR to stderr even on success, and
+        PowerShell wraps native stderr lines in ErrorRecords - which become
+        terminating errors under $ErrorActionPreference = "Stop". This helper
+        runs with "Continue", unwraps those records back to plain text, and
+        returns @{ Output = [string]; ExitCode = [int] }.
+    #>
+    param([string]$Exe, [string[]]$ExeArgs)
+    $oldEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $raw = & $Exe @ExeArgs 2>&1
+        $code = $LASTEXITCODE
+        $lines = @($raw | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message }
+            else { "$_" }
+        })
+        return @{ Output = ($lines -join "`n").Trim(); ExitCode = $code }
+    }
+    finally {
+        $ErrorActionPreference = $oldEap
+    }
+}
+
 try {
     New-Item -ItemType Directory -Force $CliDir | Out-Null
     Write-Log "=== patch-vencord start (Branch=$Branch) ==="
@@ -66,9 +94,9 @@ try {
 
     # 2. Self-update. Exit 1 with "no update available" just means we are current.
     if (-not $NoSelfUpdate) {
-        $upd = & $CliPath -update-self 2>&1 | Out-String
-        if ($LASTEXITCODE -eq 0) { Write-Log "CLI self-update applied." }
-        else { Write-Log ("CLI self-update skipped (already latest). Details: " + $upd.Trim()) "WARN" }
+        $upd = Invoke-Native -Exe $CliPath -ExeArgs @("-update-self")
+        if ($upd.ExitCode -eq 0) { Write-Log "CLI self-update applied." }
+        else { Write-Log ("CLI self-update skipped (already latest). Details: " + $upd.Output) "WARN" }
     }
     else {
         Write-Log "Skipping CLI self-update (-NoSelfUpdate)"
@@ -108,16 +136,16 @@ try {
     $failed = @()
     foreach ($b in $targets) {
         Write-Log "Patching branch '$b'..."
-        $out = & $CliPath -install -branch $b 2>&1 | Out-String
-        foreach ($ln in $out.Trim().Split("`n")) {
+        $res = Invoke-Native -Exe $CliPath -ExeArgs @("-install", "-branch", $b)
+        foreach ($ln in $res.Output.Split("`n")) {
             $t = $ln.Trim()
             if ($t) { Write-Log "  cli: $t" }
         }
-        if ($LASTEXITCODE -eq 0) {
+        if ($res.ExitCode -eq 0) {
             Write-Log "Branch '$b' patched OK"
         }
         else {
-            Write-Log "Branch '$b' FAILED (exit $LASTEXITCODE)" "ERROR"
+            Write-Log "Branch '$b' FAILED (exit $($res.ExitCode))" "ERROR"
             $failed += $b
         }
     }
